@@ -1,0 +1,134 @@
+//superdirected_diffraction
+// with EH Lock 15-02-2018
+
+// Параметры сетки и размеры области
+Nx := 1*2048   // Количество ячеек по оси X (1024)
+Ny := 1*2048   // Количество ячеек по оси Y (1024)
+Nz := 1        // Одна ячейка по оси Z (2D-модель)
+
+sizeX := 60000e-6  // Длина по оси X (24 мм)
+sizeY := 60000e-6  // Ширина по оси Y (24 мм)
+sizeZ := 16.56e-6  // Толщина по оси Z (16.56 мкм)
+
+// Размеры антенны и отступов
+mwwidth := 5000e-6   // Длина антенны по X (7 мм)
+mw := 300e-6         // Ширина антенны по Y (300 мкм)
+mwpad := 100e-6      // Отступ от края до антенны (100 мкм)
+dpml := 5000e-6      // Толщина PML-слоя (5 м
+
+
+//SetPBC(5, 0, 0)
+SetGridSize(Nx, Ny, Nz)
+SetCellSize(sizeX/Nx, sizeY/Ny, sizeZ/Nz)
+
+// Создание геометрии с отверстием
+holeR := 250e-6  // Радиус цилиндрического отверстия (250 мкм)
+a := cuboid(sizeX, sizeY, sizeZ)  // Основной кубоид
+b := cylinder(holeR, holeR).transl(sizeX/2-12500e-6,-sizeY/2+6750e-6,0)
+setgeom(a.sub(b))  // Вычитание цилиндра из кубоида
+save(geom)
+
+// Определение PML-регионов
+DefRegion(1, cuboid(dpml, sizeY, sizeZ).transl(-sizeX/2+dpml/2, 0, 0))  // Левый PML
+DefRegion(2, cuboid(sizeX, dpml, sizeZ).transl(0, sizeY/2-dpml/2, 0))  // Верхний PML
+DefRegion(3, cuboid(dpml, sizeY, sizeZ).transl(sizeX/2-dpml/2, 0, 0))  // Правый PML
+DefRegion(4, cuboid(sizeX, dpml, sizeZ).transl(0, -sizeY/2+dpml/2, 0))  // Нижний PML
+save(regions)
+
+// Параметры материала (YIG)
+alpha = 0.001      // Коэффициент затухания
+Aex = 3.614e-12    // Обменная жёсткость (Дж/м)
+Msat = 1.39e5      // Насыщенная намагниченность (А/м)
+
+//part for relax
+//m=uniform(1, 0.001, 0)
+// Начальная намагниченность и внешнее поле
+Bstat := 485e-4  // Внешнее статическое поле (Тесла)
+filock := 42.54     // Угол наклона поля (градусы)
+bb := 0 + filock
+m = uniform(cos(bb*pi/180), sin(bb*pi/180), 0)  // Начальная намагниченность под углом
+B_ext = vector(Bstat*cos(bb*pi/180), Bstat*sin(bb*pi/180), 0)  // Внешнее поле
+//(Bx,0,0)
+//B_ext.SetRegion(1,vector(Bstat*cos(bb*pi/180)*1.017167,Bstat*sin(bb*pi/180)*1.017167,0))
+OutputFormat = OVF2_TEXT
+//tableAdd(E_total)
+//tableautosave(1e-12)
+//tgstate:=30e-9
+//run(tgstate)
+relax()
+saveas(m, "groundstate_m")       
+saveas(B_demag, "groundstate_b")
+
+//intial magnetization distribution
+//m.LoadFile("groundstate_mfix9.ovf")
+
+// Установка повышенного затухания в PML-регионах
+alpha1 := 0.01
+alpha2 := 0
+alpha.SetRegion(1, alpha2)  // Левый PML
+alpha.SetRegion(2, alpha2)  // Верхний PML
+alpha.SetRegion(3, alpha2)  // Правый PML
+alpha.SetRegion(4, alpha1)  // Нижний PML
+save(alpha)
+
+Amp := 8.0e-5  // Амплитуда внешнего поля (Тесла)
+f 	:= 3000e6    // Частота возбуждения (2.864 ГГц)
+
+mask1 := newslice(3, Nx, Ny, 1)
+// mask2 := newslice(3, Nx, Ny, 1)
+for i:=0; i<Nx; i++{
+	for j:=0; j<Ny; j++{
+		r := index2coord(i, j, 0)
+		x := r.X()
+		y := r.Y()
+		//B := pow(cos(pi*(x-(SizeX/2-mwwidth/2-dpml-mwpad))/mwwidth),2)*pow(cos(pi*(y-(-SizeY/2+mwpad+dpml+mw/2))/mw),2)
+		B := 1
+		//B := (0+1.0*pow(cos(1*pi*y/ww1),2)+0.0*pow(cos(3*pi*y/ww1),1))*pow(cos(pi*(x-(-sizeX/2+dpml+pad))/mw),2)
+	//if  ((x>(SizeX/2-mwwidth-dpml-mwpad))&&(x<SizeX/2-dpml-mwpad))&&(y<(-SizeY/2+dpml+mwpad+mw))&&(y>(-SizeY/2+dpml+mwpad)){
+	if  ((x>(SizeX/2-dpml-mwwidth))&&
+		(x<SizeX/2-mwwidth))&&
+		(y<(-SizeY/2+dpml+mwpad+mw))&&
+		(y>(-SizeY/2+dpml+mwpad)){
+		mask1.set(2 , i, j, 0, B)   //cos
+			// mask2.set(1 , i, j, 0, B) //sin
+		//0 - x, 1=y, 2=z
+			}
+	}
+}
+B_ext.add(mask1, Amp*cos(2*pi*f*t))  // Добавление гармонического возбуждения
+
+
+//OutputFormat = OVF2_TEXT
+// Настройка вывода данных
+autosave(m, 5e-9)  // Автосохранение намагниченности каждые 10 нс
+
+// Вырезка части области для анализа
+// До дырки (ниже центра)
+y_before := floor(Ny/2 - Ny*0.1)  // Пример: 409
+mz1 := Crop(m.Comp(2), 0, Nx, y_before, y_before + 1, 0, Nz)  // y: [409, 410]
+bz1 := Crop(B_ext.Comp(2), 0, Nx, y_before, y_before + 1, 0, Nz)
+
+// После дырки (выше центра)
+y_after := floor(Ny/2 + Ny*0.1)    // Пример: 614
+mz2 := Crop(m.Comp(2), 0, Nx, y_after, y_after + 1, 0, Nz)    // y: [614, 615]
+bz2 := Crop(B_ext.Comp(2), 0, Nx, y_after, y_after + 1, 0, Nz)
+
+// В дырке
+y_hole := floor(Ny/2)  // Пример: 409
+mz3 := Crop(m.Comp(2), 0, Nx, y_hole, y_hole + 1, 0, Nz)
+bz3 := Crop(B_ext.Comp(2), 0, Nx, y_hole, y_hole + 1, 0, Nz)
+
+// Добавление в таблицу
+tableadd(mz1)
+tableadd(bz1)
+tableadd(mz2)
+tableadd(bz2)
+tableadd(mz3)
+tableadd(bz3)
+autosave(mz1, 5e-9)
+autosave(mz2, 5e-9)
+autosave(mz3, 5e-9)
+
+tableautosave(10e-12)  // Автосохранение таблицы каждые 10 пс
+
+run(300e-9)  // Запуск симуляции на 200 нс
